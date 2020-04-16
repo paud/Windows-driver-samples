@@ -252,10 +252,10 @@ Return Value:
     m_dwLoopbackCaptureToneInitialPhase = 0; 
 
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     m_SidebandOpen = FALSE;
     m_SidebandStarted = FALSE;
-#endif  // defined(SYSVAD_BTH_BYPASS)
+#endif  // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
     m_pPortStream = PortStream_;
     InitializeListHead(&m_NotificationList);
@@ -843,13 +843,13 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
 {
     NTSTATUS ntStatus;
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     if (m_SidebandStarted)
     {
         ntStatus = GetSidebandStreamNtStatus();
         IF_FAILED_JUMP(ntStatus, Done);
     }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
     // Return failure if this is the keyword detector pin
     if (m_pMiniport->IsKeywordDetectorPin(m_ulPin))
@@ -876,9 +876,9 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
 
     ntStatus = STATUS_SUCCESS;
     
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 Done:
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     return ntStatus;
 }
 
@@ -889,8 +889,7 @@ Done:
 //
 // Return value
 //
-//  Returns STATUS_OPERATION_IN_PROGRESS if no new packets are available and
-//  the next packet is in progress.
+//  Returns STATUS_DEVICE_NOT_READY if no new packets are available.
 //
 // IRQL - PASSIVE_LEVEL
 //
@@ -900,6 +899,7 @@ Done:
 //
 // ISSUE-2014/10/4 Will this work correctly across pause/play?
 #pragma code_seg()
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::GetReadPacket
 (
     _Out_ ULONG     *PacketNumber,
@@ -993,24 +993,11 @@ NTSTATUS CMiniportWaveRTStream::GetReadPacket
     // Update the last packet read by the OS
     m_ulLastOsReadPacket = availablePacketNumber;
 
-#if 0
-    // For test, embed packet number and timestamp into first two LONGLONGs of the packet
-    LONG packetIndex = availablePacketNumber % m_ulNotificationsPerBuffer;
-    SIZE_T packetSize = m_ulDmaBufferSize / m_ulNotificationsPerBuffer;
-    BYTE *packetDataAsBytes = m_pDmaBuffer + (packetIndex * packetSize);
-    LONGLONG *packetDataAsLonglongs = (LONGLONG*)packetDataAsBytes;
-    for (int i = 0; i < packetSize / sizeof(LONGLONG); i++)
-    {
-        packetDataAsLonglongs[i] = i;
-    }
-    packetDataAsLonglongs[0] = availablePacketNumber;
-    packetDataAsLonglongs[1] = timeOfAvailablePacketInQpc;
-#endif
-
     return STATUS_SUCCESS;
 }
 
 #pragma code_seg()
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::SetWritePacket
 (
     _In_ ULONG      PacketNumber,
@@ -1103,6 +1090,7 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
 
 //=============================================================================
 #pragma code_seg()
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::GetOutputStreamPresentationPosition
 (
     _Out_ KSAUDIO_PRESENTATION_POSITION *pPresentationPosition
@@ -1121,6 +1109,7 @@ NTSTATUS CMiniportWaveRTStream::GetOutputStreamPresentationPosition
 
 //=============================================================================
 #pragma code_seg()
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::GetPacketCount
 (
     _Out_ ULONG *pPacketCount
@@ -1178,7 +1167,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
             if (m_KsState == KSSTATE_ACQUIRE)
             {
                 // Acquire stream resources
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
                 if (m_SidebandOpen)
                 {
                     PSIDEBANDDEVICECOMMON sidebandDevice;
@@ -1198,7 +1187,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
 
                     m_SidebandOpen = FALSE;
                 }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
             }
             KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
             // Reset DMA
@@ -1228,7 +1217,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
             if (m_KsState == KSSTATE_STOP)
             {
                 // Acquire stream resources
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
                 if (m_pMiniport->IsSidebandDevice())
                 {
                     if (m_SidebandOpen == FALSE)
@@ -1250,7 +1239,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
                         m_SidebandOpen = TRUE;
                     }
                 }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
             }
             break;
             
@@ -1288,7 +1277,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
                     }
                 }
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
                 if (m_SidebandStarted)
                 {
                     PSIDEBANDDEVICECOMMON sidebandDevice;
@@ -1308,7 +1297,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
 
                     m_SidebandStarted = FALSE;
                 }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
             }
             // This call updates the linear buffer and presentation positions.
@@ -1317,7 +1306,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
 
         case KSSTATE_RUN:
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
             if (m_pMiniport->IsSidebandDevice())
             {
                 if (m_SidebandStarted == FALSE)
@@ -1339,7 +1328,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
                     m_SidebandStarted = TRUE;
                 }
             }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
             // Start DMA
             LARGE_INTEGER ullPerfCounterTemp;
@@ -1371,9 +1360,9 @@ NTSTATUS CMiniportWaveRTStream::SetState
 
     m_KsState = State_;
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 Done:
-#endif  // defined(SYSVAD_BTH_BYPASS)
+#endif  // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     return ntStatus;
 }
 
@@ -1649,7 +1638,7 @@ Return Value:
     return ntStatus;
 } // SetContentId
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
 //=============================================================================
 #pragma code_seg()
@@ -1687,7 +1676,7 @@ Return Value:
 
     return ntStatus;        
 }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
 //=============================================================================
 #pragma code_seg("PAGE")
@@ -1788,7 +1777,7 @@ TimerNotifyRT
         _this->m_llPacketCounter++;
     }
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     if (_this->m_SidebandStarted)
     {
         if (!NT_SUCCESS(_this->GetSidebandStreamNtStatus()))
@@ -1796,7 +1785,7 @@ TimerNotifyRT
             goto End;
         }
     }
-#endif  //defined(SYSVAD_BTH_BYPASS)
+#endif  //defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
     _this->m_pMiniport->DpcRoutine(qpc.QuadPart, qpcFrequency.QuadPart);
 

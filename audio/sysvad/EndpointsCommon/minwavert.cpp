@@ -196,13 +196,13 @@ Return Value:
         m_pAudioModules = NULL;
     }
 
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
     if (IsSidebandDevice())
     {
         m_pSidebandDevice->SetFormatChangeHandler(m_DeviceType, NULL, NULL);
         SAFE_RELEASE(m_pSidebandDevice);
     }
-#endif // defined(SYSVAD_BTH_BYPASS)
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
 
 } // ~CMiniportWaveRT
 
@@ -977,6 +977,245 @@ CMiniportWaveRT::ValidateStreamCreate
 }
 
 //=============================================================================
+#pragma code_seg()
+_Use_decl_annotations_
+VOID CMiniportWaveRT::AcquireFormatsAndModesLock()
+{
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &m_DeviceFormatsAndModesIrql);
+}
+
+#pragma code_seg()
+_Use_decl_annotations_
+VOID CMiniportWaveRT::ReleaseFormatsAndModesLock()
+{
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, m_DeviceFormatsAndModesIrql);
+}
+
+//---------------------------------------------------------------------------
+// GetPinSupportedDeviceFormats 
+//
+//  Return supported formats for a given pin.
+//
+//  Return value
+//      The number of KSDATAFORMAT_WAVEFORMATEXTENSIBLE items.
+//
+//  Remarks
+//      Supported formats index array follows same order as filter's pin
+//      descriptor list.
+//
+#pragma code_seg()
+_Use_decl_annotations_
+ULONG CMiniportWaveRT::GetPinSupportedDeviceFormats(_In_ ULONG PinId, _Outptr_opt_result_buffer_(return) KSDATAFORMAT_WAVEFORMATEXTENSIBLE **ppFormats)
+{
+    PPIN_DEVICE_FORMATS_AND_MODES pDeviceFormatsAndModes = NULL;
+
+    AcquireFormatsAndModesLock();
+
+    pDeviceFormatsAndModes = m_DeviceFormatsAndModes;
+    ASSERT(m_DeviceFormatsAndModesCount > PinId);
+    ASSERT(pDeviceFormatsAndModes[PinId].WaveFormats != NULL);
+    ASSERT(pDeviceFormatsAndModes[PinId].WaveFormatsCount > 0);
+
+    if (ppFormats != NULL)
+    {
+        *ppFormats = pDeviceFormatsAndModes[PinId].WaveFormats;
+    }
+
+    ReleaseFormatsAndModesLock();
+
+    return pDeviceFormatsAndModes[PinId].WaveFormatsCount;
+}
+
+//---------------------------------------------------------------------------
+// GetAudioEngineSupportedDeviceFormats 
+//
+//  Return supported device formats for the audio engine node.
+//
+//  Return value
+//      The number of KSDATAFORMAT_WAVEFORMATEXTENSIBLE items.
+//
+//  Remarks
+//      Supported formats index array follows same order as filter's pin
+//      descriptor list. This routine assumes the engine formats are the
+//      last item in the filter's array of PIN_DEVICE_FORMATS_AND_MODES.
+//
+#pragma code_seg()
+_Use_decl_annotations_
+ULONG CMiniportWaveRT::GetAudioEngineSupportedDeviceFormats(_Outptr_opt_result_buffer_(return) KSDATAFORMAT_WAVEFORMATEXTENSIBLE **ppFormats)
+{
+    ULONG i;
+    PPIN_DEVICE_FORMATS_AND_MODES pDeviceFormatsAndModes = NULL;
+
+    AcquireFormatsAndModesLock();
+
+    pDeviceFormatsAndModes = m_DeviceFormatsAndModes;
+
+    // By convention, the audio engine node's device formats are the last
+    // entry in the PIN_DEVICE_FORMATS_AND_MODES list.
+
+    // Since this endpoint apparently supports offload, there must be at least a system,
+    // offload, and loopback pin, plus the entry for the device formats.
+    ASSERT(m_DeviceFormatsAndModesCount > 3);
+
+    i = m_DeviceFormatsAndModesCount - 1;                       // Index of last list entry
+
+    ASSERT(pDeviceFormatsAndModes[i].PinType == NoPin);
+    ASSERT(pDeviceFormatsAndModes[i].WaveFormats != NULL);
+    ASSERT(pDeviceFormatsAndModes[i].WaveFormatsCount > 0);
+
+    if (ppFormats != NULL)
+    {
+        *ppFormats = pDeviceFormatsAndModes[i].WaveFormats;
+    }
+
+    ReleaseFormatsAndModesLock();
+    return pDeviceFormatsAndModes[i].WaveFormatsCount;
+}
+
+//---------------------------------------------------------------------------
+// GetPinSupportedDeviceModes 
+//
+//  Return mode information for a given pin.
+//
+//  Return value
+//      The number of MODE_AND_DEFAULT_FORMAT items or 0 if none.
+//
+//  Remarks
+//      Supported formats index array follows same order as filter's pin
+//      descriptor list.
+//
+#pragma code_seg()
+_Use_decl_annotations_
+ULONG CMiniportWaveRT::GetPinSupportedDeviceModes(_In_ ULONG PinId, _Outptr_opt_result_buffer_(return) _On_failure_(_Deref_post_null_) MODE_AND_DEFAULT_FORMAT **ppModes)
+{
+    PMODE_AND_DEFAULT_FORMAT modes;
+    ULONG numModes;
+
+    AcquireFormatsAndModesLock();
+
+    ASSERT(m_DeviceFormatsAndModesCount > PinId);
+    ASSERT((m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormatCount == 0) == (m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormat == NULL));
+
+    modes = m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormat;
+    numModes = m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormatCount;
+
+#ifdef SYSVAD_BTH_BYPASS
+    // Special handling for the SCO bypass endpoint, whose modes are determined at runtime
+    if (m_DeviceType == eBthHfpMicDevice)
+    {
+        ASSERT(m_pSidebandDevice != NULL);
+        if (m_pSidebandDevice->IsNRECSupported())
+        {
+            modes = BthHfpMicPinSupportedDeviceModesNrec;
+            numModes = ARRAYSIZE(BthHfpMicPinSupportedDeviceModesNrec);
+        }
+        else
+        {
+            modes = BthHfpMicPinSupportedDeviceModesNoNrec;
+            numModes = ARRAYSIZE(BthHfpMicPinSupportedDeviceModesNoNrec);
+        }
+    }
+#endif // SYSVAD_BTH_BYPASS
+
+    if (ppModes != NULL)
+    {
+        if (numModes > 0)
+        {
+            *ppModes = modes;
+        }
+        else
+        {
+            // ensure that the returned pointer is NULL
+            // in the event of failure (SAL annotation above
+            // indicates that it must be NULL, and OACR sees a possibility
+            // that it might not be).
+            *ppModes = NULL;
+        }
+    }
+
+    ReleaseFormatsAndModesLock();
+    return numModes;
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsSystemCapturePin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == SystemCapturePin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsCellularBiDiCapturePin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == TelephonyBidiPin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsSystemRenderPin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == SystemRenderPin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsLoopbackPin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == RenderLoopbackPin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsOffloadPin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == OffloadRenderPin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsBridgePin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == BridgePin);
+}
+
+#pragma code_seg()
+BOOL CMiniportWaveRT::IsKeywordDetectorPin(ULONG nPinId)
+{
+    AcquireFormatsAndModesLock();
+
+    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
+
+    ReleaseFormatsAndModesLock();
+    return (pinType == KeywordCapturePin);
+}
+
+
+//=============================================================================
 #pragma code_seg("PAGE")
 NTSTATUS
 CMiniportWaveRT::StreamCreated
@@ -1317,11 +1556,11 @@ CMiniportWaveRT::EvtFormatChangeHandler
         if (This->m_DeviceType == eBthHfpMicDevice)
         {
             // swap the device formats and modes for bt
-            ExAcquireFastMutex(&This->m_DeviceFormatsAndModesLock);
+            This->AcquireFormatsAndModesLock();
 
             This->m_DeviceFormatsAndModes = This->m_pSidebandDevice->GetFormatsAndModes(This->m_DeviceType);
 
-            ExReleaseFastMutex(&This->m_DeviceFormatsAndModesLock);
+            This->ReleaseFormatsAndModesLock();
 
             This->GenerateEventList(
                 (GUID*)&KSEVENTSETID_PinCapsChange,
@@ -1334,11 +1573,11 @@ CMiniportWaveRT::EvtFormatChangeHandler
         else if(This->m_DeviceType == eBthHfpSpeakerDevice)
         {
             // swap the device formats and modes for bt
-            ExAcquireFastMutex(&This->m_DeviceFormatsAndModesLock);
+            This->AcquireFormatsAndModesLock();
 
             This->m_DeviceFormatsAndModes = This->m_pSidebandDevice->GetFormatsAndModes(This->m_DeviceType);
 
-            ExReleaseFastMutex(&This->m_DeviceFormatsAndModesLock);
+            This->ReleaseFormatsAndModesLock();
 
             This->GenerateEventList(
                 (GUID*)&KSEVENTSETID_PinCapsChange,
@@ -1438,11 +1677,13 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     if (PropertyRequest->Verb & KSPROPERTY_TYPE_GET)
     {
         ntStatus = STATUS_INVALID_DEVICE_REQUEST;
-#if defined(SYSVAD_BTH_BYPASS)
+#if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
         if (IsSidebandDevice())
         {
             if (m_DeviceType == eBthHfpMicDevice ||
-                m_DeviceType == eBthHfpSpeakerDevice)
+                m_DeviceType == eBthHfpSpeakerDevice ||
+                m_DeviceType == eUsbHsSpeakerDevice ||
+                m_DeviceType == eUsbHsMicDevice)
             {
                 KSDATAFORMAT_WAVEFORMATEXTENSIBLE *propFormat = (KSDATAFORMAT_WAVEFORMATEXTENSIBLE *)PropertyRequest->Value;
                 ULONG numModes = 0;
@@ -1500,7 +1741,24 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
                 ntStatus = STATUS_SUCCESS;
             }
         }
-#endif // defined(SYSVAD_BTH_BYPASS)
+        else
+#endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
+        if (IsKeywordDetectorPin(kspPin->PinId))
+        {
+            KSDATAFORMAT_WAVEFORMATEXTENSIBLE *propFormat = (KSDATAFORMAT_WAVEFORMATEXTENSIBLE *)PropertyRequest->Value;
+            ULONG numModes = 0;
+            MODE_AND_DEFAULT_FORMAT *modeInfo = NULL;
+
+            numModes = GetPinSupportedDeviceModes(kspPin->PinId, &modeInfo);
+            if (numModes == 0 || modeInfo->DefaultFormat == NULL)
+            {
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            RtlCopyMemory(propFormat, modeInfo->DefaultFormat, modeInfo->DefaultFormat->FormatSize);
+            PropertyRequest->ValueSize = modeInfo->DefaultFormat->FormatSize;
+            ntStatus = STATUS_SUCCESS;
+        }
     }
     else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET)
     {
@@ -1573,6 +1831,49 @@ Arguments:
         PinId,
         NodeEvent,
         NodeId);
+}
+
+//=============================================================================
+#pragma code_seg()
+VOID
+CMiniportWaveRT::SendPNPNotification(
+    _In_ const GUID *                   NotificationId,
+    _In_ PVOID                          NotificationBuffer, 
+    _In_ USHORT                         NotificationBufferCb
+    )
+{
+    NTSTATUS                status = STATUS_SUCCESS;
+    PPCNOTIFICATION_BUFFER  buffer = NULL;
+
+    PAGED_CODE();
+
+    DPF_ENTER(("[SendPNPNotification]"));
+
+    // Allocate a notification buffer.
+    status = m_pPortClsNotifications->AllocNotificationBuffer(PagedPool,
+                                                        NotificationBufferCb,
+                                                        &buffer);
+    if (!NT_SUCCESS(status))
+    {
+        goto exit;
+    }
+
+    // Notification buffer is only guaranteed to be LONG aligned,
+    // it is received as ULONGLONG aligned on the receiving end.
+    RtlCopyMemory(buffer, NotificationBuffer, NotificationBufferCb);    
+
+    //
+    // Generate notification (async).
+    //
+    m_pPortClsNotifications->SendNotification(NotificationId, buffer);
+
+exit:
+    if (buffer != NULL)
+    {
+        // Free notification buffer.
+        m_pPortClsNotifications->FreeNotificationBuffer(buffer);
+        buffer = NULL;
+    }
 }
 
 //=============================================================================
@@ -2436,7 +2737,7 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorPatterns)
     // No items so clear the configuration.
     if (itemsHeader->Count == 0)
     {
-        m_KeywordDetector.ResetDetector();
+        m_KeywordDetector.ResetDetector(CONTOSO_KEYWORD1);
         return STATUS_SUCCESS;
     }
 
@@ -2483,9 +2784,7 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorPatterns)
     pattern = (CONTOSO_KEYWORDCONFIGURATION*)(patternHeader);
 
     // Program the hardware.
-    m_KeywordDetector.DownloadDetectorData(pattern->ContosoDetectorConfigurationData);
-
-    return STATUS_SUCCESS;
+    return m_KeywordDetector.DownloadDetectorData(CONTOSO_KEYWORD1, pattern->ContosoDetectorConfigurationData);
 }
 
 DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorArmed)
@@ -2497,9 +2796,8 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorArmed)
     NT_ASSERT(PropertyRequest->ValueSize >= sizeof(BOOL));
 
     RtlZeroMemory(PropertyRequest->Value, PropertyRequest->ValueSize);
-    *(BOOL*)PropertyRequest->Value = m_KeywordDetector.GetArmed();
 
-    return STATUS_SUCCESS;
+    return m_KeywordDetector.GetArmed(CONTOSO_KEYWORD1, (BOOL*)PropertyRequest->Value);
 }
 
 DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorArmed)
@@ -2515,7 +2813,7 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorArmed)
 
     armed = ((*(BOOL*)PropertyRequest->Value) != 0);
 
-    ntStatus = m_KeywordDetector.SetArmed(armed);
+    ntStatus = m_KeywordDetector.SetArmed(CONTOSO_KEYWORD1, armed);
 
     if (NT_SUCCESS(ntStatus) && armed)
     {
@@ -2523,7 +2821,7 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorArmed)
         // it is armed, but later, find a better way to demonstrate this from
         // within CKeywordDetector.
         m_pPortEvents->GenerateEventList(const_cast<GUID*>(&KSEVENTSETID_SoundDetector), KSEVENT_SOUNDDETECTOR_MATCHDETECTED, FALSE, 0, FALSE, 0);
-        m_KeywordDetector.SetArmed(FALSE);
+        m_KeywordDetector.SetArmed(CONTOSO_KEYWORD1, FALSE);
     }
 
     return ntStatus;
@@ -2546,14 +2844,296 @@ DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorMatchResult)
 
     value->Header.Size = sizeof(CONTOSO_KEYWORDDETECTIONRESULT);
     value->Header.PatternType = CONTOSO_KEYWORDCONFIGURATION_IDENTIFIER;
-    value->ContosoDetectorResultData = m_KeywordDetector.GetDetectorData();
     value->KeywordStartTimestamp = m_KeywordDetector.GetStartTimestamp();
     value->KeywordStopTimestamp = m_KeywordDetector.GetStopTimestamp();
 
     PropertyRequest->ValueSize = sizeof(*value);
-    
+
+    return m_KeywordDetector.GetDetectorData(CONTOSO_KEYWORD1, &(value->ContosoDetectorResultData));
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorSupportedPatterns2)
+{
+    CONTOSO_SUPPORTEDPATTERNSVALUE *value;
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+
+    PAGED_CODE();
+
+    NT_ASSERT(PropertyRequest->ValueSize >= sizeof(*value));
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    // There is currently only support for 1 OEM DLL, and that CLSID is returned when
+    // the EventID is GUID_NULL.
+    if (propertyInstance->EventId != GUID_NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Does this filter support a sound detector?
+    if ((m_DeviceFlags & ENDPOINT_SOUNDDETECTOR_SUPPORTED) == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    value = (CONTOSO_SUPPORTEDPATTERNSVALUE*)PropertyRequest->Value;
+
+    RtlZeroMemory(value, sizeof(*value));
+
+    value->MultipleItem.Size = sizeof(*value);
+    value->MultipleItem.Count = 1;
+    value->PatternType[0] = CONTOSO_KEYWORDCONFIGURATION_IDENTIFIER2;
+
+    PropertyRequest->ValueSize = sizeof(*value);
+
     return STATUS_SUCCESS;
 }
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorPatterns2)
+{
+    KSMULTIPLE_ITEM *itemsHeader;
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+    SOUNDDETECTOR_PATTERNHEADER *patternHeader;
+    CONTOSO_KEYWORDCONFIGURATION *pattern;
+    ULONG cbRemaining;                          // Tracks bytes remaining in property value
+
+    PAGED_CODE();
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    cbRemaining = PropertyRequest->ValueSize;
+
+    // The SYSVADPROPERTY_ITEM for this property ensures the value size is at
+    // least sizeof KSMULTIPLE_ITEM.
+    if (cbRemaining < sizeof(KSMULTIPLE_ITEM))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    itemsHeader = (KSMULTIPLE_ITEM*)PropertyRequest->Value;
+
+    // Verify property value is large enough to include the items
+    if (itemsHeader->Size > cbRemaining)
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // No items so clear the configuration.
+    if (itemsHeader->Count == 0)
+    {
+        m_KeywordDetector.ResetDetector(propertyInstance->EventId);
+        return STATUS_SUCCESS;
+    }
+
+    // This sample supports only 1 pattern type.
+    if (itemsHeader->Count > 1)
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    // Bytes remaining after the items header
+    cbRemaining = itemsHeader->Size - sizeof(*itemsHeader);
+
+    // Verify the property value is large enough to include the pattern header.
+    if (cbRemaining < sizeof(SOUNDDETECTOR_PATTERNHEADER))
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    patternHeader = (SOUNDDETECTOR_PATTERNHEADER*)(itemsHeader + 1);
+
+    // Verify the pattern type is supported.
+    if (patternHeader->PatternType != CONTOSO_KEYWORDCONFIGURATION_IDENTIFIER2)
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    // Verify the property value is large enough for the pattern.
+    if (cbRemaining < patternHeader->Size)
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Verify the pattern is large enough.
+    if (patternHeader->Size != sizeof(CONTOSO_KEYWORDCONFIGURATION))
+    {
+        PropertyRequest->ValueSize = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    pattern = (CONTOSO_KEYWORDCONFIGURATION*)(patternHeader);
+
+    return m_KeywordDetector.DownloadDetectorData(propertyInstance->EventId, pattern->ContosoDetectorConfigurationData);
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorArmed2)
+{
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+
+    PAGED_CODE();
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    // The SYSVADPROPERTY_ITEM for this property ensures the value size is at
+    // least sizeof BOOL.
+    NT_ASSERT(PropertyRequest->ValueSize >= sizeof(BOOL));
+
+    RtlZeroMemory(PropertyRequest->Value, PropertyRequest->ValueSize);
+    return m_KeywordDetector.GetArmed(propertyInstance->EventId, (BOOL*)PropertyRequest->Value);
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorArmed2)
+{
+    NTSTATUS ntStatus;
+    BOOL armed;
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+
+    PAGED_CODE();
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    // The SYSVADPROPERTY_ITEM for this property ensures the value size is at
+    // least sizeof BOOL.
+    NT_ASSERT(PropertyRequest->ValueSize >= sizeof(BOOL));
+
+    armed = ((*(BOOL*)PropertyRequest->Value) != 0);
+
+    ntStatus = m_KeywordDetector.SetArmed(propertyInstance->EventId, armed);
+
+    // THIS BLOCK IS FOR SYSVAD TESTING ONLY AND WILL NEED TO BE REMOVED
+    if (NT_SUCCESS(ntStatus) && armed &&
+        (propertyInstance->EventId == CONTOSO_KEYWORD1 || 
+        propertyInstance->EventId == CONTOSO_KEYWORD2))
+    {
+        CONTOSO_KEYWORDDETECTIONRESULT value = {0};
+
+        m_KeywordDetector.NotifyDetection();
+
+        value.EventId = propertyInstance->EventId;
+        value.Header.Size = sizeof(CONTOSO_KEYWORDDETECTIONRESULT);
+        value.Header.PatternType = CONTOSO_KEYWORDCONFIGURATION_IDENTIFIER2;
+        value.KeywordStartTimestamp = m_KeywordDetector.GetStartTimestamp();
+        value.KeywordStopTimestamp = m_KeywordDetector.GetStopTimestamp();        
+        m_KeywordDetector.GetDetectorData(propertyInstance->EventId, &(value.ContosoDetectorResultData));
+
+        SendPNPNotification(&KSNOTIFICATIONID_SoundDetector, &value, sizeof(value));
+    }
+
+    return ntStatus;
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Set_SoundDetectorReset2)
+{
+    NTSTATUS ntStatus = STATUS_SUCCESS;
+    BOOL reset;
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+
+    PAGED_CODE();
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    // The SYSVADPROPERTY_ITEM for this property ensures the value size is at
+    // least sizeof BOOL.
+    NT_ASSERT(PropertyRequest->ValueSize >= sizeof(BOOL));
+
+    reset = ((*(BOOL*)PropertyRequest->Value) != 0);
+
+    if (reset)
+    {
+        ntStatus = m_KeywordDetector.ResetDetector(propertyInstance->EventId);
+    }
+
+    return ntStatus;
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_SoundDetectorStreamingSupport2)
+{
+    PKSSOUNDDETECTORPROPERTY        propertyInstance = NULL;
+
+    PAGED_CODE();
+
+    if (PropertyRequest->InstanceSize < (sizeof(KSSOUNDDETECTORPROPERTY) - RTL_SIZEOF_THROUGH_FIELD(KSSOUNDDETECTORPROPERTY, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSSOUNDDETECTORPROPERTY, EventId);
+
+    // The SYSVADPROPERTY_ITEM for this property ensures the value size is at
+    // least sizeof BOOL.
+    NT_ASSERT(PropertyRequest->ValueSize >= sizeof(BOOL));
+
+    RtlZeroMemory(PropertyRequest->Value, PropertyRequest->ValueSize);
+    return m_KeywordDetector.GetStreamingSupport(propertyInstance->EventId, (BOOL*)PropertyRequest->Value);
+}
+
+DEFINE_CLASSPROPERTYHANDLER(CMiniportWaveRT, Get_InterleavedFormatInformation)
+{
+    PAGED_CODE();
+
+    PKSP_PIN propertyInstance = NULL;
+
+    // being a SYSVADPROPERTY, the property item is a SYSVADPROPERTY_ITEM, which contains
+    // some context information from the endpoint
+    SYSVADPROPERTY_ITEM* item = (SYSVADPROPERTY_ITEM*)PropertyRequest->PropertyItem;
+
+    // retrieve the pin information, so we can validate that this was called on the keyword pin
+    if (PropertyRequest->InstanceSize < (sizeof(KSP_PIN) - RTL_SIZEOF_THROUGH_FIELD(KSP_PIN, Property)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    propertyInstance = CONTAINING_RECORD(PropertyRequest->Instance, KSP_PIN, PinId);
+
+    // Only Keyword burst pins may support interleaving loopback and microphone audio
+    if (!IsKeywordDetectorPin(propertyInstance->PinId))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // If the context data provided for this endpoint is invalid, or if it is larger than the amount
+    // of data requested, then we have an invalid parameter
+    if (NULL == item->ContextData || item->ContextDataSize > PropertyRequest->ValueSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // copy the context data (which is interleaving information), into the output.
+    RtlCopyMemory(PropertyRequest->Value, item->ContextData , item->ContextDataSize);
+
+    return STATUS_SUCCESS;
+}
+
 
 #pragma code_seg()
 NTSTATUS CMiniportWaveRT_EventHandler_SoundDetectorMatchDetected
@@ -2862,10 +3442,13 @@ exit:
 #pragma code_seg("PAGE")
 CKeywordDetector::CKeywordDetector()
     :
+    m_streamRunning(FALSE),
     m_qpcStartCapture(0),
     m_nLastQueuedPacket(-1),
-    m_SoundDetectorArmed(FALSE),
-    m_SoundDetectorData(0),
+    m_SoundDetectorArmed1(FALSE),
+    m_SoundDetectorArmed2(FALSE),
+    m_SoundDetectorData1(0),
+    m_SoundDetectorData2(0),
     m_ullKeywordStartTimestamp(0),
     m_ullKeywordStopTimestamp(0)
 {
@@ -2926,29 +3509,96 @@ NTSTATUS CKeywordDetector::ReadKeywordTimestampRegistry()
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID CKeywordDetector::ResetDetector()
+NTSTATUS CKeywordDetector::ResetDetector(_In_ GUID eventId)
 {
     PAGED_CODE();
 
-    m_SoundDetectorData = 0;
+    if (eventId == CONTOSO_KEYWORD1)
+    {
+        m_SoundDetectorData1 = 0;
+        m_SoundDetectorArmed1 = FALSE;
+    }
+    else if(eventId == CONTOSO_KEYWORD2)
+    {
+        m_SoundDetectorData2 = 0;
+        m_SoundDetectorArmed2 = FALSE;
+    }
+    else if(eventId == GUID_NULL)
+    {
+        // When DownloadDetectorData is called to set the pattern for multiple keywords
+        // at once, all keyword detectors must be reset. Also used during keyword detector
+        // initialization and cleanup to restore it back to initial state and power down.
+        m_SoundDetectorData1 = 0;
+        m_SoundDetectorArmed1 = FALSE;
+        m_SoundDetectorData2 = 0;
+        m_SoundDetectorArmed2 = FALSE;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID CKeywordDetector::DownloadDetectorData(_In_ LONGLONG Data)
+NTSTATUS CKeywordDetector::DownloadDetectorData(_In_ GUID eventId, _In_ LONGLONG Data)
 {
     PAGED_CODE();
 
-    m_SoundDetectorData = Data;
+    // reset the detector for this event Id
+    ResetDetector(eventId);
+
+    // In this example, the driver supports detection data 
+    // set with a single call for both detectors, or each
+    // detector set individually.
+    if (eventId == CONTOSO_KEYWORD1)
+    {
+        m_SoundDetectorData1 = Data;
+    }
+    else if(eventId == CONTOSO_KEYWORD2)
+    {
+        m_SoundDetectorData2 = Data;
+    }
+    else if(eventId == GUID_NULL)
+    {
+        // in this simplified example "Data" is set on both detectors,
+        // however in a real system "Data" could be a data structure which
+        // contains different values for each detector.
+        m_SoundDetectorData1 = m_SoundDetectorData2 = Data;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
 }
 
+// The following function is only applicable to single keyword detection systems,
+// and assumes keyword detector #1.
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-LONGLONG CKeywordDetector::GetDetectorData()
+NTSTATUS CKeywordDetector::GetDetectorData(_In_ GUID eventId, _Out_ LONGLONG *Data)
 {
     PAGED_CODE();
 
-    return m_SoundDetectorData;
+    if (eventId == CONTOSO_KEYWORD1)
+    {
+        *Data = m_SoundDetectorData1;
+    }
+    else if(eventId == CONTOSO_KEYWORD2)
+    {
+        *Data = m_SoundDetectorData2;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+
+    return STATUS_SUCCESS;
 }
 
 #pragma code_seg("PAGE")
@@ -2989,30 +3639,85 @@ VOID CKeywordDetector::ResetFifo()
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS CKeywordDetector::SetArmed(_In_ BOOL Arm)
+NTSTATUS CKeywordDetector::SetArmed(_In_ GUID eventId, _In_ BOOL Arm)
 {
     PAGED_CODE();
 
-    BOOL previousArming = m_SoundDetectorArmed;
+    BOOL previousArming = FALSE;
     NTSTATUS ntStatus = STATUS_SUCCESS;
 
-    m_SoundDetectorArmed = Arm;
+    // the previous state is "armed" if either detector is armed.
+    // this reflects the fact that both detectors are sharing the
+    // same stream.
+    previousArming = m_SoundDetectorArmed1 || m_SoundDetectorArmed2;
+
+    if (eventId == CONTOSO_KEYWORD1)
+    {
+        m_SoundDetectorArmed1 = Arm;
+    }
+    else if(eventId == CONTOSO_KEYWORD2)
+    {
+        m_SoundDetectorArmed2 = Arm;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (Arm && !previousArming && m_qpcStartCapture == 0)
     {
-        ntStatus = ReadKeywordTimestampRegistry();
         StartBufferingStream();
     }
+    else if (!Arm && previousArming && !m_streamRunning)
+    {
+        // if it's not actively streaming and everything has been disarmed,
+        // then stop buffering.
+        ResetFifo();
+    }
+
     return ntStatus;
 }
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-BOOL CKeywordDetector::GetArmed()
+NTSTATUS CKeywordDetector::GetArmed(_In_ GUID eventId, _Out_ BOOL *Arm)
 {
     PAGED_CODE();
+    NTSTATUS ntStatus = STATUS_SUCCESS;
 
-    return m_SoundDetectorArmed;
+    if (eventId == CONTOSO_KEYWORD1)
+    {
+        *Arm = m_SoundDetectorArmed1;
+    }
+    else if(eventId == CONTOSO_KEYWORD2)
+    {
+        *Arm = m_SoundDetectorArmed2;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return ntStatus;
+}
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS CKeywordDetector::GetStreamingSupport(_In_ GUID eventId, _Out_ BOOL *Support)
+{
+    PAGED_CODE();
+    NTSTATUS ntStatus = STATUS_SUCCESS;
+
+    if (eventId == GUID_NULL)
+    {
+        *Support = TRUE;
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return ntStatus;
 }
 
 #pragma code_seg("PAGE")
@@ -3025,6 +3730,8 @@ VOID CKeywordDetector::Run()
     {
         StartBufferingStream();
     }
+
+    m_streamRunning = TRUE;
 }
 
 #pragma code_seg("PAGE")
@@ -3034,6 +3741,7 @@ VOID CKeywordDetector::Stop()
     PAGED_CODE();
 
     ResetFifo();
+    m_streamRunning = FALSE;
 }
 
 #pragma code_seg("PAGE")
@@ -3050,6 +3758,63 @@ VOID CKeywordDetector::StartBufferingStream()
 
     qpc = KeQueryPerformanceCounter(&qpcFrequency);
     m_qpcStartCapture = qpc.QuadPart;
+    m_qpcFrequency = qpcFrequency.QuadPart;
+
+    return;
+}
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID CKeywordDetector::NotifyDetection()
+{
+    PAGED_CODE();
+
+    // A detection will only happen if armed and the
+    // stream is already running. If there isn't a client
+    // running, then set the stream start time to align
+    // with this detection.
+    if (!m_streamRunning)
+    {
+        StartBufferingStream();
+
+        // The following code is for testing purposes only.
+        // m_qpcFrequency is defined to be the number of ticks in 1 second.
+        // Use the stream start time (the current time retrieved in StartBufferStream) to 
+        // mark when the keyword ended, and the start time minus 1 second worth of ticks
+        // to mark when the keyword started. Also, adjust the stream start time to align
+        // to this new keyword start time, so that the simulated stream contains the full keyword.
+
+        m_ullKeywordStopTimestamp = m_qpcStartCapture; // stop time is the current time
+        m_qpcStartCapture = m_qpcStartCapture - m_qpcFrequency; // buffer start time is 1 second ago
+        m_ullKeywordStartTimestamp = m_qpcStartCapture; // buffer start time = keyword start time
+
+    }
+    else
+    {
+        // The following code is for testing purposes only.
+        // If the stream is running, we cannot modify qpcStartCapture to be in
+        // the past, so instead make the keyword start & stop times fit within the
+        // time period that the keyword has been running. If it has been running
+        // for more than 1 second, then set the keyword start time to be 1 second back
+        // into the stream, as though we just figured out there was a keyword there.
+        // If it has been running less than one second, then the keyword size ends
+        // up being however long the stream has been running. 
+
+        LARGE_INTEGER qpc;
+        qpc = KeQueryPerformanceCounter(NULL);
+
+        m_ullKeywordStopTimestamp = qpc.QuadPart; // stop time is the current time
+
+        if (m_qpcStartCapture < (qpc.QuadPart - m_qpcFrequency))
+        {
+            m_ullKeywordStartTimestamp = (qpc.QuadPart - m_qpcFrequency); 
+        }
+        else
+        {
+            m_ullKeywordStartTimestamp = m_qpcStartCapture;
+        }
+
+    }
 
     return;
 }

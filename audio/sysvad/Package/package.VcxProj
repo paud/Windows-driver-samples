@@ -1,9 +1,17 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
       <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|Win32">
       <Configuration>Release</Configuration>
@@ -22,14 +30,14 @@
     <ProjectReference Include="..\KeywordDetectorAdapter\KeywordDetectorContosoAdapter.vcxproj">
       <Project>{E0F02048-78A4-4FE8-B863-66E6CB6A2C37}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\PhoneAudioSample\PhoneAudioSample.vcxproj">
-      <Project>{FABA4668-DB5E-4F6C-9D25-A0B25AD084EE}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\APO\SwapAPO\SwapAPO.vcxproj">
       <Project>{691F1D0F-CA50-46CD-8BBA-A59E9E8EB601}</Project>
     </ProjectReference>
     <ProjectReference Include="..\APO\DelayAPO\DelayAPO.vcxproj">
       <Project>{8851AB85-70B3-4798-A149-BA366DF9EC25}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\APO\KWSApo\KwsAPO.vcxproj">
+      <Project>{47358AD6-A48A-465B-965F-0A66F8BDFE23}</Project>
     </ProjectReference>
     <ProjectReference Include="..\TabletAudioSample\TabletAudioSample.vcxproj">
       <Project>{E4DF0EEE-D35B-47F2-A9B1-41EA97C465FF}</Project>
@@ -60,7 +68,15 @@
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
   </PropertyGroup>

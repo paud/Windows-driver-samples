@@ -1,69 +1,63 @@
-<!---
-    name: Virtual serial driver sample
-    platform: UMDF1
-    language: cpp
-    category: Serial
-    description: Demonstrates a simple virtual serial driver (ComPort) and a controller-less modem driver (FakeModem).
-    samplefwlink: http://go.microsoft.com/fwlink/p/?LinkId=617963
---->
+---
+page_type: sample
+description: "Demonstrates a simple virtual serial driver (ComPort) and a controller-less modem driver (FakeModem)."
+languages:
+- cpp
+products:
+- windows
+- windows-wdk
+---
 
-
-Virtual serial driver sample
-============================
+# Virtual serial driver sample
 
 This sample demonstrates these two serial drivers:
 
--   A simple virtual serial driver (ComPort)
--   A controller-less modem driver (FakeModem).This driver supports sending and receiving AT commands using the ReadFile and WriteFile calls or via a TAPI interface using an application such as, HyperTerminal.
+- A simple virtual serial driver (ComPort)
+
+- A controller-less modem driver (FakeModem).This driver supports sending and receiving AT commands using the ReadFile and WriteFile calls or via a TAPI interface using an application such as, HyperTerminal.
 
 This sample driver is a minimal driver meant to demonstrate the usage of the User-Mode Driver Framework. It is not intended for use in a production environment.
 
-For more information, see [Serial Controller and Device Drivers](http://msdn.microsoft.com/en-us/library/windows/hardware/ff546939) in the WDK documentation.
+For more information, see the [Serial Controller Driver Design Guide](https://docs.microsoft.com/windows-hardware/drivers/serports/).
 
-Code tour
----------
+## Code tour
 
-File manifest
+### comsup.cpp and comsup.h
 
-Description
+- COM Support code - specifically base classes which provide implementations for the standard COM interfaces **IUnknown** and **IClassFactory** which are used throughout the sample.
 
-comsup.cpp & comsup.h
+- The implementation of **IClassFactory** is designed to create instances of the CMyDriver class. If you should change the name of your base driver class, you would also need to modify this file.
 
-COM Support code - specifically base classes which provide implementations for the standard COM interfaces **IUnknown** and **IClassFactory** which are used throughout the sample.
+### dllsup.cpp
 
-The implementation of **IClassFactory** is designed to create instances of the CMyDriver class. If you should change the name of your base driver class, you would also need to modify this file.
+- DLL Support code - provides the DLL's entry point as well as the single required export (**DllGetClassObject**).
 
-dllsup.cpp
+- These depend on comsup.cpp to perform the necessary class creation.
 
-DLL Support code - provides the DLL's entry point as well as the single required export (**DllGetClassObject**).
+### exports.def
 
-These depend on comsup.cpp to perform the necessary class creation.
+- This file lists the functions that the driver DLL exports.
 
-exports.def
+### internal.h
 
-This file lists the functions that the driver DLL exports.
+- This is the main header file for the sample driver.
 
-internal.h
+### driver.cpp and driver.h
 
-This is the main header file for the sample driver.
+- Definition and implementation of the driver callback class (CMyDriver) for the sample. This includes **DriverEntry** and events on the framework driver object.
 
-driver.cpp & driver.h
+### device.cpp and driver.h
 
-Definition and implementation of the driver callback class (CMyDriver) for the sample. This includes **DriverEntry** and events on the framework driver object.
+- Definition and implementation of the device callback class (CMyDriver) for the sample. This includes events on the framework device object.
 
-device.cpp & driver.h
+### queue.cpp and queue.h
 
-Definition and implementation of the device callback class (CMyDriver) for the sample. This includes events on the framework device object.
+- Definition and implementation of the base queue callback class (CMyQueue). This includes events on the framework I/O queue object.
 
-queue.cpp & queue.h
+### VirtualSerial.rc /FakeModem.rc
 
-Definition and implementation of the base queue callback class (CMyQueue). This includes events on the framework I/O queue object.
+- This file defines resource information for the sample driver.
 
-VirtualSerial.rc /FakeModem.rc
+### VirtualSerial.inf / FakeModem.inf
 
-This file defines resource information for the sample driver.
-
-VirtualSerial.inf / FakeModem.inf
-
-INF file that contains installation information for this driver.
-
+- INF file that contains installation information for this driver.
